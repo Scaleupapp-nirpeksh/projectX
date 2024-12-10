@@ -1,12 +1,13 @@
-const mongoose = require('mongoose');
-const { Schema } = mongoose;
+const mongoose = require("mongoose");
 
-const financeCategorySchema = new Schema({
-    orgId: { type: Schema.Types.ObjectId, ref: 'Organization', required: true },
-    name: { type: String, required: true, trim: true },
-    parentCategoryId: { type: Schema.Types.ObjectId, ref: 'FinanceCategory' }, // null if top-level
-    description: { type: String, trim: true }
-  }, { timestamps: true, index: { orgId: 1, name: 1 } });
-  
-  module.exports = mongoose.model('FinanceCategory', financeCategorySchema);
-  
+const FinanceCategorySchema = new mongoose.Schema({
+  orgId: { type: mongoose.Schema.Types.ObjectId, ref: "Organization", required: true },
+  name: { type: String, required: true },
+  description: { type: String },
+  parentCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: "FinanceCategory" },
+  subCategories: { type: [String], default: [] }, // Add this line
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+module.exports = mongoose.model("FinanceCategory", FinanceCategorySchema);

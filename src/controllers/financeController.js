@@ -19,7 +19,7 @@ function isAdmin(user, orgId) {
 exports.createCategory = async (req, res) => {
   try {
     const { orgId } = req.params;
-    const { name, parentCategoryId, description } = req.body;
+    const { name, parentCategoryId, description, subCategories } = req.body;
 
     if (!isAdmin(req.user, orgId)) {
       return res.status(403).json({ message: 'Only admins can create categories.' });
@@ -29,7 +29,12 @@ exports.createCategory = async (req, res) => {
       return res.status(400).json({ message: 'Category name is required.' });
     }
 
-    // Optional: validate parentCategoryId if provided
+    // Validate `subCategories` - ensure it's an array
+    if (subCategories && !Array.isArray(subCategories)) {
+      return res.status(400).json({ message: 'Sub-categories must be an array.' });
+    }
+
+    // Optional: validate `parentCategoryId` if provided
     let parentCategory = null;
     if (parentCategoryId) {
       parentCategory = await FinanceCategory.findById(parentCategoryId);
@@ -42,7 +47,8 @@ exports.createCategory = async (req, res) => {
       orgId,
       name,
       parentCategoryId,
-      description
+      description,
+      subCategories: subCategories || [], // Default to an empty array if not provided
     });
 
     const savedCategory = await category.save();
@@ -52,6 +58,7 @@ exports.createCategory = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
 
 /**
  * List all finance categories
@@ -88,7 +95,7 @@ exports.listCategories = async (req, res) => {
 exports.updateCategory = async (req, res) => {
   try {
     const { orgId, categoryId } = req.params;
-    const { name, parentCategoryId, description } = req.body;
+    const { name, parentCategoryId, description, subCategories } = req.body;
 
     if (!isAdmin(req.user, orgId)) {
       return res.status(403).json({ message: 'Only admins can update categories.' });
@@ -104,6 +111,12 @@ exports.updateCategory = async (req, res) => {
     }
     if (description !== undefined) {
       category.description = description;
+    }
+    if (subCategories !== undefined) {
+      if (!Array.isArray(subCategories)) {
+        return res.status(400).json({ message: 'Sub-categories must be an array.' });
+      }
+      category.subCategories = subCategories;
     }
 
     if (parentCategoryId !== undefined) {
@@ -127,6 +140,7 @@ exports.updateCategory = async (req, res) => {
   }
 };
 
+
 /**
  * Delete a finance category
  * DELETE /api/organizations/:orgId/components/finance/categories/:categoryId
@@ -145,20 +159,20 @@ exports.deleteCategory = async (req, res) => {
       return res.status(404).json({ message: 'Category not found in this organization.' });
     }
 
-    // Check if there are any finance records using this category
-    // If needed, query FinanceRecord to ensure no records exist:
-    // const recordCount = await FinanceRecord.countDocuments({ orgId, categoryId });
-    // if (recordCount > 0) {
-    //   return res.status(400).json({ message: 'Cannot delete category in use by finance records.' });
-    // }
+    // Optional: Delete sub-categories if parent is deleted
+    await FinanceCategory.deleteMany({ parentCategoryId: categoryId });
 
-    await category.remove();
-    res.json({ message: 'Category deleted successfully.' });
+    // Delete the category itself
+    await FinanceCategory.deleteOne({ _id: categoryId });
+
+    res.json({ message: 'Category and its sub-categories deleted successfully.' });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
   }
 };
+
+
 
 
 // Create a new field definition
