@@ -282,33 +282,35 @@ exports.createFieldDefinition = async (req, res) => {
     }
   };
   
-  // Delete a field definition
-  exports.deleteFieldDefinition = async (req, res) => {
-    try {
-      const { orgId, fieldId } = req.params;
-  
-      if (!isAdmin(req.user, orgId)) {
-        return res.status(403).json({ message: 'Only admins can delete field definitions.' });
-      }
-  
-      const fieldDef = await FinanceFieldDefinition.findById(fieldId);
-      if (!fieldDef || fieldDef.orgId.toString() !== orgId) {
-        return res.status(404).json({ message: 'Field definition not found.' });
-      }
-  
-      // Check if used by any records (optional)
-       const usageCount = await FinanceRecord.countDocuments({ orgId, [`fields.${fieldId}`]: { $exists: true } });
-      if (usageCount > 0) {
-         return res.status(400).json({ message: 'Cannot delete a field definition in use.' });
-       }
-  
-      await fieldDef.remove();
-      res.json({ message: 'Field definition deleted successfully.' });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
+ // Delete a field definition
+exports.deleteFieldDefinition = async (req, res) => {
+  try {
+    const { orgId, fieldId } = req.params;
+
+    if (!isAdmin(req.user, orgId)) {
+      return res.status(403).json({ message: 'Only admins can delete field definitions.' });
     }
-  };
+
+    const fieldDef = await FinanceFieldDefinition.findById(fieldId);
+    if (!fieldDef || fieldDef.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Field definition not found.' });
+    }
+
+    // Check if used by any records
+    const usageCount = await FinanceRecord.countDocuments({ orgId, [`fields.${fieldId}`]: { $exists: true } });
+    if (usageCount > 0) {
+      return res.status(400).json({ message: 'Cannot delete a field definition in use.' });
+    }
+
+    // Use deleteOne() instead of remove()
+    await fieldDef.deleteOne();
+    res.json({ message: 'Field definition deleted successfully.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
   
 
   // Create a finance record
