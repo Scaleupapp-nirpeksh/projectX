@@ -26,6 +26,7 @@ const financeRecordSchema = new Schema({
   paidOn: { type: Date }
 }, { timestamps: true });
 
+// In validateReferences (after fetching fieldDefs):
 async function validateReferences(record) {
   const category = await FinanceCategory.findById(record.categoryId).lean();
   if (!category) throw new Error('Category not found.');
@@ -34,51 +35,58 @@ async function validateReferences(record) {
   }
 
   if (record.fields && record.fields.size > 0) {
-    const fieldDefinitionIds = Array.from(record.fields.keys()).map(id => mongoose.Types.ObjectId(id));
-    const fieldDefs = await FinanceFieldDefinition.find({ 
-      _id: { $in: fieldDefinitionIds }, 
-      orgId: record.orgId 
+    const fieldNames = Array.from(record.fields.keys());
+    const fieldDefs = await FinanceFieldDefinition.find({
+      orgId: record.orgId,
+      name: { $in: fieldNames }
     }).lean();
 
-    if (fieldDefs.length !== fieldDefinitionIds.length) {
-      throw new Error('Invalid field definition references.');
+    if (fieldDefs.length !== fieldNames.length) {
+      throw new Error('Invalid field definition references (some names not found).');
     }
 
-    return fieldDefs;
+    // Filter by record type
+    const allowedFields = [];
+    for (const fd of fieldDefs) {
+      const typeAllowed = fd.applicableTo.includes(record.type) || fd.applicableTo.includes('both');
+      if (!typeAllowed) {
+        throw new Error(`Field "${fd.name}" is not applicable to ${record.type} records.`);
+      }
+      allowedFields.push(fd);
+    }
+
+    return allowedFields;
   }
 
   return [];
 }
 
+
+
+
 function evaluateFormulas(record, fieldDefs) {
-  // Build a map from fieldId -> fieldValue and fieldId -> fieldName
-  const fieldIdToName = {};
-  const fieldIdToDef = {};
+  // Create a name -> definition map
+  const nameToDef = {};
   for (const fd of fieldDefs) {
-    fieldIdToName[fd._id.toString()] = fd.name;
-    fieldIdToDef[fd._id.toString()] = fd;
+    nameToDef[fd.name] = fd;
   }
 
-  // Build a name -> value map for evaluation
+  // Build a name -> value map from record.fields
   const nameToValue = {};
-  for (const [fieldId, value] of record.fields) {
-    const fd = fieldIdToDef[fieldId];
-    if (!fd) continue;
-    nameToValue[fd.name] = value; 
+  for (const [fieldName, value] of record.fields) {
+    const fd = nameToDef[fieldName];
+    if (!fd) continue; 
+    nameToValue[fieldName] = value;
   }
 
-  // Evaluate each formula field
+  // Evaluate each formula field by name
   for (const fd of fieldDefs) {
     if (fd.type === 'formula') {
       const expr = fd.expression;
       if (!expr) continue;
 
-      // Simple parser: replace field names in expr with their values from nameToValue
-      // e.g., expr: "amount * 0.05"
-      // If amount=1000, expr after replacement: "1000 * 0.05"
-      // Evaluate using a safe eval or a small math parser
+      // Replace field names in the expression with their values
       const safeExpr = expr.replace(/\b[a-zA-Z_]\w*\b/g, match => {
-        // match might be a field name, replace with value
         if (match in nameToValue) {
           const val = nameToValue[match];
           if (typeof val !== 'number') {
@@ -86,35 +94,64 @@ function evaluateFormulas(record, fieldDefs) {
           }
           return val;
         }
-        return '0'; // or throw error if undefined field
+        return '0';
       });
 
       let result;
       try {
-        // Evaluate the expression safely:
-        // In a production system, consider a safer evaluation method, such as a small math parser.
         result = Function('"use strict";return (' + safeExpr + ')')();
       } catch (e) {
         throw new Error(`Error evaluating formula for field ${fd.name}: ${e.message}`);
       }
 
-      // Store the result back
-      record.fields.set(fd._id.toString(), result);
+      // Store the result back into record.fields by name
+      record.fields.set(fd.name, result);
     }
   }
 }
+
 
 financeRecordSchema.pre('save', async function(next) {
   try {
     const record = this;
     const fieldDefs = await validateReferences(record);
+
     if (fieldDefs.length > 0) {
       evaluateFormulas(record, fieldDefs);
     }
+
+    // Check for final amount field
+    const finalAmountFields = fieldDefs.filter(fd => fd.config && fd.config.isFinalAmount);
+    if (finalAmountFields.length !== 1) {
+      return next(new Error('Exactly one final amount field (isFinalAmount=true) is required.'));
+    }
+
+    const finalFieldName = finalAmountFields[0].name;
+    const finalValue = record.fields.get(finalFieldName);
+    if (typeof finalValue !== 'number') {
+      return next(new Error(`The final amount field "${finalFieldName}" must be a numeric value.`));
+    }
+
+    // Partial payment logic
+    // Suppose partial payment is indicated if we have a certain field or user sets some recurrence/partial config
+    // For simplicity, assume if recurrence.frequency != 'none' or partial payment is indicated by certain fields:
+    const isPartialPayment = record.fields.has('total_amount') && record.fields.has('amount_paid');
+    if (isPartialPayment) {
+      const total = record.fields.get('total_amount');
+      const paid = record.fields.get('amount_paid');
+      if (typeof total !== 'number' || typeof paid !== 'number') {
+        return next(new Error('Total amount and amount paid fields must be numeric.'));
+      }
+      if (paid > total) {
+        return next(new Error('Amount paid cannot exceed total amount.'));
+      }
+    }
+
     next();
   } catch (error) {
     next(error);
   }
 });
+
 
 module.exports = mongoose.model('FinanceRecord', financeRecordSchema);

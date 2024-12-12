@@ -177,50 +177,112 @@ exports.deleteCategory = async (req, res) => {
 
 // Create a new field definition
 exports.createFieldDefinition = async (req, res) => {
-    try {
-      const { orgId } = req.params;
-      const { name, label, type, options, expression, config } = req.body;
-  
-      if (!isAdmin(req.user, orgId)) {
-        return res.status(403).json({ message: 'Only admins can create field definitions.' });
+  try {
+    const { orgId } = req.params;
+    const { name, label, type, options, expression, config, applicableTo } = req.body;
+
+    if (!isAdmin(req.user, orgId)) {
+      return res.status(403).json({ message: 'Only admins can create field definitions.' });
+    }
+
+    if (!name || !type) {
+      return res.status(400).json({ message: 'Name and type are required.' });
+    }
+
+    const allowedTypes = ['string', 'number', 'date', 'dropdown', 'formula', 'boolean'];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({ message: 'Invalid field type.' });
+    }
+
+    if (type === 'dropdown' && (!options || !Array.isArray(options) || options.length === 0)) {
+      return res.status(400).json({ message: 'Dropdown fields require a non-empty options array.' });
+    }
+
+    if (type === 'formula' && (!expression || typeof expression !== 'string')) {
+      return res.status(400).json({ message: 'Formula fields require an expression string.' });
+    }
+
+    // Validate applicableTo if provided
+    let validApplicableTo = ['expense', 'revenue', 'both'];
+    let finalApplicableTo = ['expense','revenue']; // default if none provided
+    if (applicableTo && Array.isArray(applicableTo) && applicableTo.length > 0) {
+      // Ensure applicableTo is a single value array like ['expense'] or ['revenue'] or ['both']
+      // If you are only selecting one option at a time, handle that logic. For a radio button, we expect only one value in the array.
+      const chosen = applicableTo[0];
+      if (validApplicableTo.includes(chosen)) {
+        finalApplicableTo = [chosen];
       }
-  
-      if (!name || !type) {
-        return res.status(400).json({ message: 'Name and type are required.' });
-      }
-  
-      const allowedTypes = ['string', 'number', 'date', 'dropdown', 'formula', 'boolean'];
-      if (!allowedTypes.includes(type)) {
-        return res.status(400).json({ message: 'Invalid field type.' });
-      }
-  
-      // Additional validation if type is dropdown, options should be provided
-      if (type === 'dropdown' && (!options || !Array.isArray(options) || options.length === 0)) {
+    }
+
+    const fieldDef = new FinanceFieldDefinition({
+      orgId,
+      name,
+      label,
+      type,
+      options: options || [],
+      expression: expression || null,
+      config: config || {},
+      applicableTo: finalApplicableTo
+    });
+
+    const savedField = await fieldDef.save();
+    res.status(201).json({ field: savedField });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Update a field definition
+exports.updateFieldDefinition = async (req, res) => {
+  try {
+    const { orgId, fieldId } = req.params;
+    const { label, options, expression, config, applicableTo } = req.body;
+
+    if (!isAdmin(req.user, orgId)) {
+      return res.status(403).json({ message: 'Only admins can update field definitions.' });
+    }
+
+    const fieldDef = await FinanceFieldDefinition.findById(fieldId);
+    if (!fieldDef || fieldDef.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Field definition not found.' });
+    }
+
+    if (label !== undefined) fieldDef.label = label;
+    if (options !== undefined && fieldDef.type === 'dropdown') {
+      if (!Array.isArray(options) || options.length === 0) {
         return res.status(400).json({ message: 'Dropdown fields require a non-empty options array.' });
       }
-  
-      // For formula fields, expression is required
-      if (type === 'formula' && (!expression || typeof expression !== 'string')) {
-        return res.status(400).json({ message: 'Formula fields require an expression string.' });
-      }
-  
-      const fieldDef = new FinanceFieldDefinition({
-        orgId,
-        name,
-        label,
-        type,
-        options: options || [],
-        expression: expression || null,
-        config: config || {}
-      });
-  
-      const savedField = await fieldDef.save();
-      res.status(201).json({ field: savedField });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
+      fieldDef.options = options;
     }
-  };
+
+    if (expression !== undefined && fieldDef.type === 'formula') {
+      if (typeof expression !== 'string') {
+        return res.status(400).json({ message: 'Formula expression must be a string.' });
+      }
+      fieldDef.expression = expression;
+    }
+
+    if (config !== undefined) {
+      fieldDef.config = config;
+    }
+
+    // Update applicableTo if provided
+    if (applicableTo && Array.isArray(applicableTo) && applicableTo.length > 0) {
+      let validApplicableTo = ['expense', 'revenue', 'both'];
+      const chosen = applicableTo[0];
+      if (validApplicableTo.includes(chosen)) {
+        fieldDef.applicableTo = [chosen];
+      }
+    }
+
+    const updatedField = await fieldDef.save();
+    res.json({ field: updatedField });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
   
   // List all field definitions
   exports.listFieldDefinitions = async (req, res) => {
@@ -239,48 +301,6 @@ exports.createFieldDefinition = async (req, res) => {
     }
   };
   
-  // Update a field definition
-  exports.updateFieldDefinition = async (req, res) => {
-    try {
-      const { orgId, fieldId } = req.params;
-      const { label, options, expression, config } = req.body;
-  
-      if (!isAdmin(req.user, orgId)) {
-        return res.status(403).json({ message: 'Only admins can update field definitions.' });
-      }
-  
-      const fieldDef = await FinanceFieldDefinition.findById(fieldId);
-      if (!fieldDef || fieldDef.orgId.toString() !== orgId) {
-        return res.status(404).json({ message: 'Field definition not found.' });
-      }
-  
-      // Note: We generally should not allow changing `type` or `name` easily once in use.
-      if (label !== undefined) fieldDef.label = label;
-      if (options !== undefined && fieldDef.type === 'dropdown') {
-        if (!Array.isArray(options) || options.length === 0) {
-          return res.status(400).json({ message: 'Dropdown fields require a non-empty options array.' });
-        }
-        fieldDef.options = options;
-      }
-  
-      if (expression !== undefined && fieldDef.type === 'formula') {
-        if (typeof expression !== 'string') {
-          return res.status(400).json({ message: 'Formula expression must be a string.' });
-        }
-        fieldDef.expression = expression;
-      }
-  
-      if (config !== undefined) {
-        fieldDef.config = config;
-      }
-  
-      const updatedField = await fieldDef.save();
-      res.json({ field: updatedField });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
-    }
-  };
   
  // Delete a field definition
 exports.deleteFieldDefinition = async (req, res) => {
@@ -334,7 +354,7 @@ exports.createRecord = async (req, res) => {
         orgId,
         type,
         categoryId,
-        status: status || 'draft',
+        status: status || 'approved',
         fields: fields || new Map(),
         recurrence: recurrence || {}
       });
