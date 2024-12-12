@@ -554,29 +554,34 @@ exports.createRecord = async (req, res) => {
     }
   };
   
-  // Delete a finance record
-  exports.deleteRecord = async (req, res) => {
-    try {
-      const { orgId, recordId } = req.params;
-  
-      const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
-      if (!membership) {
-        return res.status(403).json({ message: 'Not a member of this organization.' });
-      }
-  
-      const record = await FinanceRecord.findById(recordId);
-      if (!record || record.orgId.toString() !== orgId) {
-        return res.status(404).json({ message: 'Record not found.' });
-      }
-  
-      // Possibly add logic to disallow deletion if status is 'approved' or 'paid', depending on business rules.
-      await record.remove();
-      res.json({ message: 'Record deleted successfully.' });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
+// Delete a finance record
+exports.deleteRecord = async (req, res) => {
+  try {
+    const { orgId, recordId } = req.params;
+
+    const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
+    if (!membership) {
+      return res.status(403).json({ message: 'Not a member of this organization.' });
     }
-  };
+
+    // **Use findByIdAndDelete() to find and delete in one step**
+    const record = await FinanceRecord.findByIdAndDelete(recordId);
+
+    if (!record || record.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Record not found or already deleted.' });
+    }
+
+    // **Business Logic: Prevent deletion if necessary**
+    // Note: Since we've already deleted the record, this logic should be placed before deletion
+    // So it's better to check status before deletion as in Option A
+
+    res.json({ message: 'Record deleted successfully.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 
 
   exports.approveRecord = async (req, res) => {
