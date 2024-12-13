@@ -368,8 +368,10 @@ exports.createRecord = async (req, res) => {
       if (!partner || partner.orgId.toString() !== orgId) {
         return res.status(400).json({ message: 'Invalid partnerId.' });
       }
-      // Ensure the partner type matches the record type
-      if (partner.type !== type && partner.type !== 'both') { // Adjust if 'both' is applicable
+
+      // **Updated Validation: Map record type to expected partner type**
+      const expectedPartnerType = type === 'expense' ? 'vendor' : 'client';
+      if (partner.type !== expectedPartnerType) {
         return res.status(400).json({ message: `Partner type (${partner.type}) does not match record type (${type}).` });
       }
     }
@@ -392,6 +394,7 @@ exports.createRecord = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
   
 
 /**

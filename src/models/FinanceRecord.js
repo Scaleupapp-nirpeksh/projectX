@@ -1,4 +1,5 @@
 // src/models/FinanceRecord.js
+
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 const FinanceCategory = require('./FinanceCategory');
@@ -36,6 +37,10 @@ const financeRecordSchema = new Schema({
 financeRecordSchema.pre('save', async function(next) {
   try {
     const record = this;
+    console.log(`Pre-save Hook: Creating/Updating Record ID: ${record._id}`);
+    console.log(`Record Type: ${record.type}`);
+    console.log(`Partner ID: ${record.partnerId}`);
+
     const fieldDefs = await validateReferences(record);
     
     // Validate partnerId if provided
@@ -47,8 +52,14 @@ financeRecordSchema.pre('save', async function(next) {
       if (partner.orgId.toString() !== record.orgId.toString()) {
         throw new Error('Partner does not belong to the same organization.');
       }
-      if (partner.type !== record.type && partner.type !== 'both') { // Adjust if 'both' is applicable
-        throw new Error(`Partner type (${partner.type}) does not match record type (${record.type}).`);
+      
+      // **Updated Validation: Map record type to expected partner type**
+      const expectedPartnerType = record.type === 'expense' ? 'vendor' : 'client';
+      console.log(`Expected Partner Type: ${expectedPartnerType}`);
+      console.log(`Actual Partner Type: ${partner.type}`);
+      
+      if (partner.type !== expectedPartnerType) {
+        throw new Error(`Partner type (${partner.type}) does not match record type (${record.type}). Expected partner type: ${expectedPartnerType}.`);
       }
     }
 
@@ -83,6 +94,7 @@ financeRecordSchema.pre('save', async function(next) {
 
     next();
   } catch (error) {
+    console.error(`Pre-save Hook Error: ${error.message}`);
     next(error);
   }
 });
@@ -147,16 +159,23 @@ function evaluateFormulas(record, fieldDefs) {
       if (!expr) continue;
 
       // Replace field names in the expression with their values
-      const safeExpr = expr.replace(/\b[a-zA-Z_]\w*\b/g, match => {
-        if (match in nameToValue) {
-          const val = nameToValue[match];
-          if (typeof val !== 'number') {
-            throw new Error(`Formula field ${fd.name} references a non-numeric field: ${match}`);
+      const referencedNames = expr.match(/\b[a-zA-Z_]\w*\b/g) || [];
+      let safeExpr = expr;
+
+      for (let ref of referencedNames) {
+        if (ref in nameToValue) {
+          let val = nameToValue[ref];
+          let numVal = Number(val);
+          if (isNaN(numVal)) {
+            throw new Error(`Formula field ${fd.name} references a non-numeric field: ${ref}`);
           }
-          return val;
+          // Replace all occurrences of ref with numVal
+          safeExpr = safeExpr.replace(new RegExp(`\\b${ref}\\b`, 'g'), numVal);
+        } else {
+          // If ref doesn't exist or is undefined, treat as 0
+          safeExpr = safeExpr.replace(new RegExp(`\\b${ref}\\b`, 'g'), 0);
         }
-        return '0';
-      });
+      }
 
       let result;
       try {
