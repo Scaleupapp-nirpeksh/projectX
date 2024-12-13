@@ -18,7 +18,7 @@ const financeRecordSchema = new Schema({
   status: { 
     type: String, 
     enum: ['draft', 'pending_approval', 'approved', 'paid', 'completed'],
-    default: 'draft' 
+    default: 'completed' 
   },
   fields: { type: Map, of: Schema.Types.Mixed },
   recurrence: {

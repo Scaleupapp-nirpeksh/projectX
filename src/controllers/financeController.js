@@ -567,10 +567,14 @@ exports.updateRecord = async (req, res) => {
         if (!partner || partner.orgId.toString() !== orgId) {
           return res.status(400).json({ message: 'Invalid partnerId.' });
         }
-        // Ensure the partner type matches the record type
-        if (partner.type !== record.type && partner.type !== 'both') { // Adjust if 'both' is applicable
-          return res.status(400).json({ message: `Partner type (${partner.type}) does not match record type (${record.type}).` });
+        
+        // **Map record.type to expected partner.type**
+        const expectedPartnerType = record.type === 'expense' ? 'vendor' : 'client';
+        
+        if (partner.type !== expectedPartnerType && partner.type !== 'both') {
+          return res.status(400).json({ message: `Partner type (${partner.type}) does not match record type (${record.type}). Expected partner type: ${expectedPartnerType}.` });
         }
+
         record.partnerId = partnerId;
       } else {
         record.partnerId = null; // Remove partner association
@@ -632,6 +636,7 @@ exports.updateRecord = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
   
 // Delete a finance record
 exports.deleteRecord = async (req, res) => {
