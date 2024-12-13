@@ -5,6 +5,7 @@ const User = require('../models/User'); // if needed
 const FinanceFieldDefinition = require('../models/FinanceFieldDefinition');
 const FinanceRecord = require('../models/FinanceRecord');
 const FinanceApprovalRule = require('../models/FinanceApprovalRule');
+const Partner = require('../models/Partner'); 
 
 // Helper to check admin status
 function isAdmin(user, orgId) {
@@ -333,96 +334,148 @@ exports.deleteFieldDefinition = async (req, res) => {
 
   
 
-  // Create a finance record
+/**
+ * Create a finance record
+ * POST /api/organizations/:orgId/components/finance/records
+ */
 exports.createRecord = async (req, res) => {
-    try {
-      const { orgId } = req.params;
-      const { type, categoryId, status, fields, recurrence } = req.body;
-  
-      const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
-      if (!membership) {
-        return res.status(403).json({ message: 'Not a member of this organization.' });
-      }
-  
-      // Validate type
-      const allowedTypes = ['expense', 'revenue'];
-      if (!allowedTypes.includes(type)) {
-        return res.status(400).json({ message: 'Invalid record type.' });
-      }
-  
-      const record = new FinanceRecord({
-        orgId,
-        type,
-        categoryId,
-        status: status || 'approved',
-        fields: fields || new Map(),
-        recurrence: recurrence || {}
-      });
-  
-      // pre-save hook will validate category and fields
-      const savedRecord = await record.save();
-      res.status(201).json({ record: savedRecord });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
+  try {
+    const { orgId } = req.params;
+    const { type, categoryId, status, fields, recurrence, partnerId } = req.body;
+
+    const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
+    if (!membership) {
+      return res.status(403).json({ message: 'Not a member of this organization.' });
     }
-  };
-  
-  // List finance records with filters
-  exports.listRecords = async (req, res) => {
-    try {
-      const { orgId } = req.params;
-      const { type, categoryId, status, startDate, endDate } = req.query;
-  
-      const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
-      if (!membership) {
-        return res.status(403).json({ message: 'Not a member of this organization.' });
-      }
-  
-      const query = { orgId };
-      if (type) query.type = type; 
-      if (categoryId) query.categoryId = categoryId;
-      if (status) query.status = status;
-  
-      // If we have date fields, say records have a createdAt or a custom date field:
-      // For simplicity, let's assume filtering by createdAt:
-      if (startDate || endDate) {
-        query.createdAt = {};
-        if (startDate) query.createdAt.$gte = new Date(startDate);
-        if (endDate) query.createdAt.$lte = new Date(endDate);
-      }
-  
-      const records = await FinanceRecord.find(query).lean();
-      res.json({ records });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
+
+    // Validate type
+    const allowedTypes = ['expense', 'revenue'];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({ message: 'Invalid record type.' });
     }
-  };
-  
-  // Get a single record
-  exports.getRecord = async (req, res) => {
-    try {
-      const { orgId, recordId } = req.params;
-  
-      const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
-      if (!membership) {
-        return res.status(403).json({ message: 'Not a member of this organization.' });
+
+    // Validate categoryId if provided
+    if (categoryId) {
+      const category = await FinanceCategory.findById(categoryId);
+      if (!category || category.orgId.toString() !== orgId) {
+        return res.status(400).json({ message: 'Invalid categoryId.' });
       }
-  
-      const record = await FinanceRecord.findById(recordId);
-      if (!record || record.orgId.toString() !== orgId) {
-        return res.status(404).json({ message: 'Record not found.' });
-      }
-  
-      res.json({ record });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
     }
-  };
+
+    // Validate partnerId if provided
+    if (partnerId) {
+      const partner = await Partner.findById(partnerId);
+      if (!partner || partner.orgId.toString() !== orgId) {
+        return res.status(400).json({ message: 'Invalid partnerId.' });
+      }
+      // Ensure the partner type matches the record type
+      if (partner.type !== type && partner.type !== 'both') { // Adjust if 'both' is applicable
+        return res.status(400).json({ message: `Partner type (${partner.type}) does not match record type (${type}).` });
+      }
+    }
+
+    const record = new FinanceRecord({
+      orgId,
+      type,
+      categoryId,
+      partnerId: partnerId || null, // Associate Partner if provided
+      status: status || 'approved',
+      fields: fields || new Map(),
+      recurrence: recurrence || {}
+    });
+
+    // pre-save hook will validate category and fields
+    const savedRecord = await record.save();
+    res.status(201).json({ record: savedRecord });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
   
-  
+
+/**
+ * List finance records with filters and partner details
+ * GET /api/organizations/:orgId/components/finance/records
+ */
+exports.listRecords = async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const { type, categoryId, status, startDate, endDate, partnerId, page = 1, limit = 20 } = req.query;
+
+    const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
+    if (!membership) {
+      return res.status(403).json({ message: 'Not a member of this organization.' });
+    }
+
+    const query = { orgId };
+    if (type) query.type = type;
+    if (categoryId) query.categoryId = categoryId;
+    if (status) query.status = status;
+    if (partnerId) query.partnerId = partnerId; // Optional: Filter by Partner
+
+    // Date filtering on 'createdAt' field
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    // Pagination
+    const records = await FinanceRecord.find(query)
+      .populate('categoryId', 'name description') // Populate Category with selected fields
+      .populate('partnerId', 'name type contactInfo') // Populate Partner with selected fields
+      .populate('createdBy', 'name email') // Optional: Populate creator's details
+      .populate('approvedBy', 'name email') // Optional: Populate approvers' details
+      .sort({ createdAt: -1 }) // Sort by latest
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit))
+      .lean();
+
+    const totalRecords = await FinanceRecord.countDocuments(query);
+
+    res.json({ 
+      records, 
+      totalPages: Math.ceil(totalRecords / limit), 
+      currentPage: parseInt(page) 
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+/**
+ * Get a single finance record with partner details
+ * GET /api/organizations/:orgId/components/finance/records/:recordId
+ */
+exports.getRecord = async (req, res) => {
+  try {
+    const { orgId, recordId } = req.params;
+
+    const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
+    if (!membership) {
+      return res.status(403).json({ message: 'Not a member of this organization.' });
+    }
+
+    const record = await FinanceRecord.findById(recordId)
+      .populate('categoryId', 'name description') // Populate Category with selected fields
+      .populate('partnerId', 'name type contactInfo') // Populate Partner with selected fields
+      .populate('createdBy', 'name email') // Optional: Populate creator's details
+      .populate('approvedBy', 'name email') // Optional: Populate approvers' details
+      .lean();
+
+    if (!record || record.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Record not found.' });
+    }
+
+    res.json({ record });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
 
   function passesCondition(conditions, recordDoc) {
     // A very simplistic condition checker. 
@@ -463,96 +516,119 @@ exports.createRecord = async (req, res) => {
     return true;
   }
   
-  exports.updateRecord = async (req, res) => {
-    try {
-      const { orgId, recordId } = req.params;
-      const { type, categoryId, status, fields, recurrence } = req.body;
-  
-      const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
-      if (!membership) {
-        return res.status(403).json({ message: 'Not a member of this organization.' });
+/**
+ * Update a finance record
+ * PUT /api/organizations/:orgId/components/finance/records/:recordId
+ */
+exports.updateRecord = async (req, res) => {
+  try {
+    const { orgId, recordId } = req.params;
+    const { type, categoryId, status, fields, recurrence, partnerId } = req.body;
+
+    const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
+    if (!membership) {
+      return res.status(403).json({ message: 'Not a member of this organization.' });
+    }
+
+    const record = await FinanceRecord.findById(recordId);
+    if (!record || record.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Record not found.' });
+    }
+
+    // Update type if provided
+    if (type) {
+      const allowedTypes = ['expense', 'revenue'];
+      if (!allowedTypes.includes(type)) {
+        return res.status(400).json({ message: 'Invalid record type.' });
       }
-  
-      const record = await FinanceRecord.findById(recordId);
-      if (!record || record.orgId.toString() !== orgId) {
-        return res.status(404).json({ message: 'Record not found.' });
-      }
-  
-      // Update fields if provided
-      if (type) {
-        const allowedTypes = ['expense', 'revenue'];
-        if (!allowedTypes.includes(type)) {
-          return res.status(400).json({ message: 'Invalid record type.' });
+      record.type = type;
+    }
+
+    // Update categoryId if provided
+    if (categoryId !== undefined) {
+      if (categoryId) {
+        const category = await FinanceCategory.findById(categoryId);
+        if (!category || category.orgId.toString() !== orgId) {
+          return res.status(400).json({ message: 'Invalid categoryId.' });
         }
-        record.type = type;
-      }
-  
-      if (categoryId !== undefined) {
         record.categoryId = categoryId;
+      } else {
+        record.categoryId = null; // Remove category association
       }
-  
-      // If status is changing, handle approval logic
-      let statusChangedToPendingApproval = false;
-      if (status !== undefined && status !== record.status) {
-        if (status === 'pending_approval') {
-          statusChangedToPendingApproval = true;
+    }
+
+    // Update partnerId if provided
+    if (partnerId !== undefined) {
+      if (partnerId) {
+        const partner = await Partner.findById(partnerId);
+        if (!partner || partner.orgId.toString() !== orgId) {
+          return res.status(400).json({ message: 'Invalid partnerId.' });
         }
-        record.status = status;
+        // Ensure the partner type matches the record type
+        if (partner.type !== record.type && partner.type !== 'both') { // Adjust if 'both' is applicable
+          return res.status(400).json({ message: `Partner type (${partner.type}) does not match record type (${record.type}).` });
+        }
+        record.partnerId = partnerId;
+      } else {
+        record.partnerId = null; // Remove partner association
       }
-  
-      if (fields !== undefined) {
-        record.fields = fields;
+    }
+
+    // Update status if provided
+    let statusChangedToPendingApproval = false;
+    if (status !== undefined && status !== record.status) {
+      if (status === 'pending_approval') {
+        statusChangedToPendingApproval = true;
       }
-  
-      if (recurrence !== undefined) {
-        record.recurrence = recurrence;
-      }
-  
-      // Approval logic: if status changed to pending_approval, check rules
-      if (statusChangedToPendingApproval) {
-        if (record.status === 'pending_approval') {
-          // Evaluate approval rules
-          const rules = await FinanceApprovalRule.find({ orgId });
-          
-          // Convert record.fields from Map to object for easier condition checks
-          const recordDoc = record.toObject();
-          // recordDoc.fields is currently a Map in the schema, but toObject() might give an object or we must convert:
-          if (recordDoc.fields instanceof Map) {
-            // Convert Map to object
-            const fieldsObj = {};
-            for (const [k,v] of record.fields) {
-              fieldsObj[k] = v;
-            }
-            recordDoc.fields = fieldsObj;
-          }
-  
-          record.approvalsRequired = [];
-          record.approvalsGiven = [];
-  
-          for (const rule of rules) {
-            if (passesCondition(rule.conditions, recordDoc)) {
-              for (const approverId of rule.requiredApprovers) {
-                if (!record.approvalsRequired.some(r => r.toString() === approverId.toString())) {
-                  record.approvalsRequired.push(approverId);
-                }
+      record.status = status;
+    }
+
+    // Update fields if provided
+    if (fields !== undefined) {
+      record.fields = fields;
+    }
+
+    // Update recurrence if provided
+    if (recurrence !== undefined) {
+      record.recurrence = recurrence;
+    }
+
+    // Approval logic: if status changed to pending_approval, check rules
+    if (statusChangedToPendingApproval) {
+      if (record.status === 'pending_approval') {
+        // Evaluate approval rules
+        const rules = await FinanceApprovalRule.find({ orgId });
+
+        // Convert record.fields from object to access easily
+        const recordDoc = record.toObject();
+
+        record.approvalsRequired = [];
+        record.approvalsGiven = [];
+
+        for (const rule of rules) {
+          if (passesCondition(rule.conditions, recordDoc)) {
+            for (const approverId of rule.requiredApprovers) {
+              if (!record.approvalsRequired.some(r => r.toString() === approverId.toString())) {
+                record.approvalsRequired.push(approverId);
               }
             }
           }
-  
-          // If no approvals required, automatically approve
-          if (record.approvalsRequired.length === 0) {
-            record.status = 'approved';
-          }
+        }
+
+        // If no approvals required, automatically approve
+        if (record.approvalsRequired.length === 0) {
+          record.status = 'approved';
         }
       }
-  
-      const updatedRecord = await record.save();
-      res.json({ record: updatedRecord });
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: 'Server error' });
     }
-  };
+
+    const updatedRecord = await record.save();
+    res.json({ record: updatedRecord });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
   
 // Delete a finance record
 exports.deleteRecord = async (req, res) => {
@@ -628,4 +704,175 @@ exports.deleteRecord = async (req, res) => {
     }
   };
   
-  
+
+
+  /**
+ * Create a new Partner (Vendor/Client)
+ * POST /api/organizations/:orgId/components/finance/partners
+ */
+exports.createPartner = async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const { name, type, contactInfo, categoryId } = req.body;
+
+    // Check admin privileges
+    if (!isAdmin(req.user, orgId)) {
+      return res.status(403).json({ message: 'Only admins can create partners.' });
+    }
+
+    // Validate required fields
+    if (!name || !type) {
+      return res.status(400).json({ message: 'Partner name and type are required.' });
+    }
+
+    // Validate type
+    const allowedTypes = ['vendor', 'client'];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({ message: 'Invalid partner type.' });
+    }
+
+    // If categoryId is provided, validate it
+    let category = null;
+    if (categoryId) {
+      category = await FinanceCategory.findById(categoryId);
+      if (!category || category.orgId.toString() !== orgId) {
+        return res.status(400).json({ message: 'Invalid categoryId.' });
+      }
+    }
+
+    const partner = new Partner({
+      orgId,
+      name,
+      type,
+      contactInfo: contactInfo || {},
+      categoryId: categoryId || null,
+    });
+
+    const savedPartner = await partner.save();
+    res.status(201).json({ partner: savedPartner });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+/**
+ * List all Partners (Vendors/Clients)
+ * GET /api/organizations/:orgId/components/finance/partners
+ */
+exports.listPartners = async (req, res) => {
+  try {
+    const { orgId } = req.params;
+    const { type, categoryId } = req.query; // Optional filters
+
+    // Check membership
+    const membership = req.user.organizations.find(m => m.orgId.toString() === orgId);
+    if (!membership) {
+      return res.status(403).json({ message: 'Not a member of this organization.' });
+    }
+
+    // Build query
+    const query = { orgId };
+    if (type) {
+      const allowedTypes = ['vendor', 'client'];
+      if (!allowedTypes.includes(type)) {
+        return res.status(400).json({ message: 'Invalid partner type filter.' });
+      }
+      query.type = type;
+    }
+    if (categoryId) {
+      query.categoryId = categoryId;
+    }
+
+    const partners = await Partner.find(query).populate('categoryId').lean();
+    res.json({ partners });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+/**
+ * Update a Partner (Vendor/Client)
+ * PUT /api/organizations/:orgId/components/finance/partners/:partnerId
+ */
+exports.updatePartner = async (req, res) => {
+  try {
+    const { orgId, partnerId } = req.params;
+    const { name, type, contactInfo, categoryId } = req.body;
+
+    // Check admin privileges
+    if (!isAdmin(req.user, orgId)) {
+      return res.status(403).json({ message: 'Only admins can update partners.' });
+    }
+
+    // Find the Partner
+    const partner = await Partner.findById(partnerId);
+    if (!partner || partner.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Partner not found in this organization.' });
+    }
+
+    // Update fields if provided
+    if (name !== undefined) partner.name = name;
+    if (type !== undefined) {
+      const allowedTypes = ['vendor', 'client'];
+      if (!allowedTypes.includes(type)) {
+        return res.status(400).json({ message: 'Invalid partner type.' });
+      }
+      partner.type = type;
+    }
+    if (contactInfo !== undefined) partner.contactInfo = contactInfo;
+    if (categoryId !== undefined) {
+      if (categoryId) {
+        const category = await FinanceCategory.findById(categoryId);
+        if (!category || category.orgId.toString() !== orgId) {
+          return res.status(400).json({ message: 'Invalid categoryId.' });
+        }
+        partner.categoryId = categoryId;
+      } else {
+        partner.categoryId = null; // Remove category association
+      }
+    }
+
+    const updatedPartner = await partner.save();
+    res.json({ partner: updatedPartner });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+/**
+ * Delete a Partner (Vendor/Client)
+ * DELETE /api/organizations/:orgId/components/finance/partners/:partnerId
+ */
+exports.deletePartner = async (req, res) => {
+  try {
+    const { orgId, partnerId } = req.params;
+
+    // Check admin privileges
+    if (!isAdmin(req.user, orgId)) {
+      return res.status(403).json({ message: 'Only admins can delete partners.' });
+    }
+
+    // Find the Partner
+    const partner = await Partner.findById(partnerId);
+    if (!partner || partner.orgId.toString() !== orgId) {
+      return res.status(404).json({ message: 'Partner not found in this organization.' });
+    }
+
+    // Check if the Partner is associated with any records
+    const associatedRecordsCount = await FinanceRecord.countDocuments({ orgId, partnerId });
+    if (associatedRecordsCount > 0) {
+      return res.status(400).json({ message: 'Cannot delete a partner associated with records.' });
+    }
+
+    // Delete the Partner
+    await Partner.deleteOne({ _id: partnerId });
+
+    res.json({ message: 'Partner deleted successfully.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};

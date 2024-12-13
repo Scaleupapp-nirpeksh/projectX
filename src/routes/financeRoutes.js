@@ -29,5 +29,12 @@ router.put('/:orgId/components/finance/records/:recordId', financeController.upd
 router.delete('/:orgId/components/finance/records/:recordId', financeController.deleteRecord);
 router.post('/:orgId/components/finance/records/:recordId/approve', financeController.approveRecord);
 
+// **Partner Routes**
+router.post('/:orgId/components/finance/partners', financeController.createPartner);
+router.get('/:orgId/components/finance/partners', financeController.listPartners);
+router.put('/:orgId/components/finance/partners/:partnerId', financeController.updatePartner);
+router.delete('/:orgId/components/finance/partners/:partnerId', financeController.deletePartner);
+
+
 
 module.exports = router;
